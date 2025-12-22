@@ -60,3 +60,20 @@ def test_repeat_until_loop():
     script = 'Let>k=0\nRepeat>k\n Let>k=k+1\n Until>k,3\n'
     it.run(script)
     assert it.variables['k'] == 3
+
+
+def test_if_else_and_goto():
+    it = MJTInterpreter()
+    # simple IF true
+    script = 'Let>k=0\nIf>k=0\n Let>r=1\nElse\n Let>r=2\nEndIf\n'
+    it.run(script)
+    assert it.variables['r'] == 1
+    # simple IF false
+    script2 = 'Let>k=1\nIf>k=0\n Let>r=1\nElse\n Let>r=2\nEndIf\n'
+    it.run(script2)
+    assert it.variables['r'] == 2
+
+    # GOTO / LABEL loop example
+    script3 = 'Let>k=0\nLabel>start\n Let>k=k+1\n If>k=3\n  Goto>end\n EndIf\n Goto>start\nLabel>end\n'
+    it.run(script3)
+    assert it.variables['k'] == 3

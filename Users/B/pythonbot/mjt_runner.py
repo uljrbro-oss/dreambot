@@ -252,12 +252,85 @@ class MJTInterpreter:
                             self.log('UNTIL without REPEAT')
                 except Exception as e:
                     self.log(f"UNTIL error: {e}")
+            elif cmd == 'IF':
+                # Simple conditional: support 'var=value', 'var<>value', 'var>value', 'var<value'
+                try:
+                    cond = args.strip()
+                    matched = False
+                    # find operator
+                    for op in ['<>', '>=', '<=', '>', '<', '=']:
+                        if op in cond:
+                            left, right = cond.split(op, 1)
+                            left = left.strip()
+                            right = right.strip()
+                            lv = int(self.variables.get(left, 0)) if left.isidentifier() else int(left)
+                            rv = int(right)
+                            if op == '<>':
+                                matched = (lv != rv)
+                            elif op == '>=':
+                                matched = (lv >= rv)
+                            elif op == '<=':
+                                matched = (lv <= rv)
+                            elif op == '>':
+                                matched = (lv > rv)
+                            elif op == '<':
+                                matched = (lv < rv)
+                            else:
+                                matched = (lv == rv)
+                            break
+                    if not matched:
+                        # skip to matching ELSE or ENDIF
+                        depth = 0
+                        while pc < len(self.lines):
+                            ln = self.lines[pc]
+                            pc += 1
+                            cmd2 = ln.split('>', 1)[0].strip().upper() if '>' in ln else ln.strip().upper()
+                            if cmd2 == 'IF':
+                                depth += 1
+                            elif cmd2 == 'ENDIF':
+                                if depth == 0:
+                                    break
+                                else:
+                                    depth -= 1
+                            elif cmd2 == 'ELSE' and depth == 0:
+                                break
+                    # if matched, continue executing inner block
+                except Exception as e:
+                    self.log(f"IF error: {e}")
+            elif cmd == 'ELSE':
+                # skip to matching ENDIF
+                depth = 0
+                while pc < len(self.lines):
+                    ln = self.lines[pc]
+                    pc += 1
+                    cmd2 = ln.split('>', 1)[0].strip().upper() if '>' in ln else ln.strip().upper()
+                    if cmd2 == 'IF':
+                        depth += 1
+                    elif cmd2 == 'ENDIF':
+                        if depth == 0:
+                            break
+                        else:
+                            depth -= 1
+                # continue after ENDIF
+            elif cmd == 'ENDIF':
+                # nothing to do; end of conditional block
+                continue
+            elif cmd == 'GOTO':
+                try:
+                    label = args.strip()
+                    if label in self.labels:
+                        # jump to the line after label
+                        pc = self.labels[label] + 1
+                    else:
+                        self.log(f"GOTO: label not found: {label}")
+                except Exception as e:
+                    self.log(f"GOTO error: {e}")
             elif cmd in ('EXIT', 'END'):
                 self.log('Script EXIT')
                 break
             else:
                 # labels and other commands ignored for now
-                if cmd.startswith('LABEL'):
+                if cmd.startswith('LABEL') or cmd.startswith('SRT'):
                     continue
                 self.log(f"Unsupported MJT command: {cmd}")
         self.log('Script finished')
