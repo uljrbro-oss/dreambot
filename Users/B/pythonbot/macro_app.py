@@ -857,11 +857,15 @@ class MacroApp(QWidget):
         btn_save = QPushButton('Save...')
         btn_run = QPushButton('Run')
         btn_stop = QPushButton('Stop')
+        btn_step = QPushButton('Step')
+        btn_resume = QPushButton('Resume')
         btn_insert = QPushButton('Insert to Actions')
         btn_row.addWidget(btn_load)
         btn_row.addWidget(btn_save)
         btn_row.addWidget(btn_run)
         btn_row.addWidget(btn_stop)
+        btn_row.addWidget(btn_step)
+        btn_row.addWidget(btn_resume)
         btn_row.addWidget(btn_insert)
         layout.addLayout(btn_row)
 
@@ -879,11 +883,59 @@ class MacroApp(QWidget):
             with open(fn, 'w', encoding='utf-8') as f:
                 f.write(editor.toPlainText())
 
+        # debugger
+        from mjt_runner import MJTDebugger
+        dbg = MJTDebugger(self.signals.log.emit)
+
+        # variable table
+        var_table = QTableWidget()
+        var_table.setColumnCount(2)
+        var_table.setHorizontalHeaderLabels(['Variable', 'Value'])
+        layout.addWidget(var_table)
+
+        def refresh_vars():
+            state = dbg.get_state()
+            vars = state.get('variables', {})
+            var_table.setRowCount(len(vars))
+            for i, (k, v) in enumerate(sorted(vars.items())):
+                var_table.setItem(i, 0, QTableWidgetItem(str(k)))
+                var_table.setItem(i, 1, QTableWidgetItem(str(v)))
+
         def run_text():
-            self.run_script_text(editor.toPlainText(), label='editor')
+            txt = editor.toPlainText()
+            dbg.load(txt)
+            dbg.run()
+            # poll state while running
+            def poll():
+                while dbg.get_state().get('running'):
+                    refresh_vars()
+                    time.sleep(0.1)
+                refresh_vars()
+            threading.Thread(target=poll, daemon=True).start()
 
         def stop_text():
-            self.stop_script()
+            dbg.stop()
+
+        def step_text():
+            txt = editor.toPlainText()
+            if dbg.lines == []:
+                dbg.load(txt)
+            ok = dbg.step()
+            refresh_vars()
+            if not ok:
+                QMessageBox.information(self, 'Debugger', 'No more lines to step or debugger stopped')
+
+        def resume_text():
+            txt = editor.toPlainText()
+            if dbg.lines == []:
+                dbg.load(txt)
+            dbg.resume()
+            def poll2():
+                while dbg.get_state().get('running'):
+                    refresh_vars()
+                    time.sleep(0.1)
+                refresh_vars()
+            threading.Thread(target=poll2, daemon=True).start()
 
         def insert_actions():
             txt = editor.toPlainText()
@@ -895,6 +947,8 @@ class MacroApp(QWidget):
         btn_save.clicked.connect(save_file)
         btn_run.clicked.connect(run_text)
         btn_stop.clicked.connect(stop_text)
+        btn_step.clicked.connect(step_text)
+        btn_resume.clicked.connect(resume_text)
         btn_insert.clicked.connect(insert_actions)
 
         dlg.show()

@@ -771,3 +771,161 @@ class MJTInterpreter:
                 return int(token, 16)
             except Exception:
                 raise ValueError('Invalid color code')
+
+
+class MJTDebugger:
+    """Line-by-line debugger for MJT scripts. Allows stepping and running with state inspection."""
+    def __init__(self, log_fn=None, runner_api=None):
+        self.log = log_fn or (lambda s: None)
+        self.runner_api = runner_api or RunnerAPI()
+        self.variables = {}
+        self.lines = []
+        self.pc = 0
+        self._stop = False
+        self._running = False
+        self._thread = None
+
+    def load(self, script_text: str):
+        # simple parse (reuse interpreter parsing rules)
+        self.lines = []
+        for raw in script_text.splitlines():
+            line = raw.strip()
+            if not line:
+                continue
+            up = line.lstrip()
+            if up.upper().startswith('REM') or line.startswith(';'):
+                continue
+            self.lines.append(line)
+        self.variables = {}
+        self.pc = 0
+        self._stop = False
+        self.log('Debugger loaded')
+
+    def step(self):
+        if self.pc >= len(self.lines) or self._stop:
+            self.log('Debugger: no more lines or stopped')
+            return False
+        line = self.lines[self.pc]
+        self.pc += 1
+        try:
+            if '>' in line:
+                cmd, args = line.split('>', 1)
+                cmd = cmd.strip().upper()
+                args = args.strip()
+            else:
+                cmd = line.strip().upper()
+                args = ''
+            # substitute variables
+            for k, v in dict(self.variables).items():
+                args = args.replace(f"%{k}%", str(v))
+            # support a small subset (LET, MESSAGE, WAIT small, MOUSEMOVE, LCLICK, GPC, WPC)
+            if cmd == 'LET' and '=' in args:
+                name, expr = args.split('=', 1)
+                name = name.strip()
+                try:
+                    val = safe_eval_expr(expr.strip(), self.variables)
+                except Exception:
+                    val = 0
+                self.variables[name] = int(val)
+                self.log(f"DBG LET {name}={val}")
+            elif cmd == 'MESSAGE':
+                self.log(f"DBG MSG: {args}")
+            elif cmd == 'WAIT':
+                try:
+                    t = float(args.split(',')[0]) if args else 0.1
+                except Exception:
+                    t = 0.1
+                endt = time.time() + float(t)
+                while time.time() < endt and not self._stop:
+                    time.sleep(0.05)
+            elif cmd == 'MOUSEMOVE':
+                try:
+                    x, y = [int(p.strip()) for p in args.split(',')[:2]]
+                    self.runner_api.move(x, y)
+                    self.log(f"DBG MouseMove {x},{y}")
+                except Exception as e:
+                    self.log(f"DBG MouseMove error: {e}")
+            elif cmd.startswith('LCLICK'):
+                times = 1
+                if '*' in args:
+                    parts = args.split('*')
+                    try:
+                        times = int(parts[1].strip())
+                    except Exception:
+                        times = 1
+                for _ in range(max(1, times)):
+                    if self._stop:
+                        break
+                    self.runner_api.click()
+                    time.sleep(0.02)
+                self.log(f"DBG LClick x{times}")
+            elif cmd in ('GPC', 'GETPIXELCOLOR'):
+                try:
+                    x, y, varname = [p.strip() for p in args.split(',')[:3]]
+                    x = int(x); y = int(y)
+                    rgb = self.runner_api.screenshot_getpixel(x, y)
+                    val = (int(rgb[0]) << 16) | (int(rgb[1]) << 8) | int(rgb[2])
+                    self.variables[varname] = val
+                    self.log(f"DBG GPC {varname}={val}")
+                except Exception as e:
+                    self.log(f"DBG GPC error: {e}")
+            elif cmd in ('WPC', 'WAITPIXELCOLOR'):
+                try:
+                    parts = [p.strip() for p in args.split(',')]
+                    color_token = parts[0]
+                    x = int(parts[1]); y = int(parts[2])
+                    timeout = float(parts[3]) if len(parts) > 3 else 0
+                    if color_token.startswith('#'):
+                        target = int(color_token.lstrip('#'), 16)
+                    else:
+                        target = int(color_token)
+                    result = False
+                    start = time.time()
+                    while not self._stop:
+                        rgb = self.runner_api.screenshot_getpixel(int(x), int(y))
+                        val = (int(rgb[0]) << 16) | (int(rgb[1]) << 8) | int(rgb[2])
+                        if val == target:
+                            result = True
+                            break
+                        if timeout > 0 and (time.time() - start) >= float(timeout):
+                            break
+                        time.sleep(0.05)
+                    self.variables['WPC_RESULT'] = int(result)
+                    self.log(f"DBG WPC result: {bool(result)}")
+                except Exception as e:
+                    self.log(f"DBG WPC error: {e}")
+            else:
+                self.log(f"DBG Unsupported or unhandled: {line}")
+        except Exception as e:
+            self.log(f"DBG step error: {e}")
+        return True
+
+    def run(self):
+        if self._running:
+            return
+        self._running = True
+        self._stop = False
+        def _runloop():
+            while not self._stop and self.pc < len(self.lines):
+                ok = self.step()
+                if not ok:
+                    break
+            self._running = False
+        self._thread = threading.Thread(target=_runloop, daemon=True)
+        self._thread.start()
+
+    def resume(self):
+        # alias for run
+        self.run()
+
+    def pause(self):
+        self._stop = True
+        self._running = False
+
+    def stop(self):
+        self._stop = True
+        self._running = False
+
+    def get_state(self):
+        return {'pc': self.pc, 'variables': dict(self.variables), 'running': self._running}
+
