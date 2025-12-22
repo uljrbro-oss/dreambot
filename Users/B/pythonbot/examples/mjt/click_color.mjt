@@ -1,0 +1,15 @@
+; Example MJT script: wait for color and click
+Message>Starting color monitor example
+Let>TARGET=#4DA931
+Let>X=100
+Let>Y=200
+Repeat>i
+  WaitPixelColor>%TARGET%,%X%,%Y%,1
+  If>WPC_RESULT=1
+    MouseMove>%X%,%Y%
+    LClick
+    Wait>0.5
+  EndIf
+  Wait>0.1
+Until>i,10
+Message>Example finished
