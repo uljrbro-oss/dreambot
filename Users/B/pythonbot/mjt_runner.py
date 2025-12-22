@@ -135,6 +135,70 @@ class RunnerAPI:
             return None
         return None
 
+    # File operations
+    def file_copy(self, src, dst):
+        import shutil
+        shutil.copy(src, dst)
+
+    def file_delete(self, path):
+        import os
+        if os.path.exists(path):
+            os.remove(path)
+
+    def read_text(self, path):
+        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+            return f.read()
+
+    def write_text(self, path, text):
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(str(text))
+
+    def get_file_list(self, pattern):
+        import glob
+        return glob.glob(pattern)
+
+    # Clipboard
+    def clipboard_set(self, text):
+        try:
+            import pyperclip
+            pyperclip.copy(str(text))
+            return True
+        except Exception:
+            # fallback: not available
+            return False
+
+    def clipboard_get(self):
+        try:
+            import pyperclip
+            return pyperclip.paste()
+        except Exception:
+            return ''
+
+    # HTTP
+    def http_get(self, url, timeout=5.0):
+        try:
+            import requests
+            r = requests.get(url, timeout=float(timeout))
+            return r.text
+        except Exception:
+            return None
+
+    # Window existence check (optional using pywinauto)
+    def window_exists(self, title_substring):
+        try:
+            from pywinauto import Desktop
+            ds = Desktop(backend='win32')
+            wins = ds.windows()
+            for w in wins:
+                try:
+                    if title_substring.lower() in w.window_text().lower():
+                        return True
+                except Exception:
+                    continue
+            return False
+        except Exception:
+            return False
+
 class MJTInterpreter:
     def __init__(self, log_fn: Optional[Callable[[str], None]] = None, runner_api: Optional[RunnerAPI] = None):
         self.variables: Dict[str, int] = {}
@@ -311,6 +375,92 @@ class MJTInterpreter:
                     self.log(f"WPC result: {bool(result)}")
                 except Exception as e:
                     self.log(f"WPC error: {e}")
+            elif cmd == 'FILECOPY':
+                try:
+                    src, dst = [p.strip() for p in args.split(',')[:2]]
+                    self.runner_api.file_copy(src, dst)
+                    self.log(f"FILECOPY {src} -> {dst}")
+                except Exception as e:
+                    self.log(f"FILECOPY error: {e}")
+            elif cmd == 'FILEDELETE':
+                try:
+                    path = args.strip()
+                    self.runner_api.file_delete(path)
+                    self.log(f"FILEDELETE {path}")
+                except Exception as e:
+                    self.log(f"FILEDELETE error: {e}")
+            elif cmd == 'READFILE':
+                try:
+                    path, varname = [p.strip() for p in args.split(',')[:2]]
+                    text = self.runner_api.read_text(path)
+                    self.variables[varname] = text
+                    self.log(f"READFILE {path} -> {varname}")
+                except Exception as e:
+                    self.log(f"READFILE error: {e}")
+            elif cmd == 'WRITEFILE':
+                try:
+                    path, text = [p.strip() for p in args.split(',', 1)[:2]]
+                    self.runner_api.write_text(path, text)
+                    self.log(f"WRITEFILE {path}")
+                except Exception as e:
+                    self.log(f"WRITEFILE error: {e}")
+            elif cmd == 'GETFILELIST':
+                try:
+                    pattern, varname = [p.strip() for p in args.split(',')[:2]]
+                    lst = self.runner_api.get_file_list(pattern)
+                    self.variables[varname] = ';'.join(lst)
+                    self.log(f"GETFILELIST {pattern} -> {varname} (count={len(lst)})")
+                except Exception as e:
+                    self.log(f"GETFILELIST error: {e}")
+            elif cmd == 'CLIPSET':
+                try:
+                    text = args
+                    ok = self.runner_api.clipboard_set(text)
+                    self.log(f"CLIPSET ok={ok}")
+                except Exception as e:
+                    self.log(f"CLIPSET error: {e}")
+            elif cmd == 'CLIPGET':
+                try:
+                    varname = args.strip()
+                    v = self.runner_api.clipboard_get()
+                    self.variables[varname] = v
+                    self.log(f"CLIPGET {varname}")
+                except Exception as e:
+                    self.log(f"CLIPGET error: {e}")
+            elif cmd == 'HTTPGET':
+                try:
+                    url, varname = [p.strip() for p in args.split(',')[:2]]
+                    txt = self.runner_api.http_get(url)
+                    self.variables[varname] = txt if txt is not None else ''
+                    self.log(f"HTTPGET {url} -> {varname}")
+                except Exception as e:
+                    self.log(f"HTTPGET error: {e}")
+            elif cmd == 'IFWINDOWOPEN':
+                try:
+                    title, varname = [p.strip() for p in args.split(',')[:2]]
+                    exists = self.runner_api.window_exists(title)
+                    self.variables[varname] = int(bool(exists))
+                    self.log(f"IFWINDOWOPEN {title} -> {varname}={int(bool(exists))}")
+                except Exception as e:
+                    self.log(f"IFWINDOWOPEN error: {e}")
+            elif cmd in ('WAITWINDOWOPEN', 'WWO'):
+                try:
+                    title, timeout, varname = [p.strip() for p in args.split(',')[:3]]
+                    timeout = float(timeout)
+                    found = False
+                    start = time.time()
+                    while not self._stop:
+                        if self.runner_api.window_exists(title):
+                            found = True
+                            break
+                        if timeout > 0 and (time.time() - start) >= timeout:
+                            break
+                        time.sleep(0.05)
+                    if varname:
+                        self.variables[varname] = int(found)
+                    self.log(f"WWO found={found}")
+                except Exception as e:
+                    self.log(f"WWO error: {e}")
             elif cmd == 'REPEAT':
                 varname = args.strip()
                 repeat_stack.append((varname, pc))

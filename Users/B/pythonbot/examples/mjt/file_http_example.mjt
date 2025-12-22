@@ -1,0 +1,13 @@
+; Example: File and HTTP commands
+Message>File & HTTP example
+WriteFile>examples/mjt/test.txt,Hello from MJT
+ReadFile>examples/mjt/test.txt,TEXT
+Message>File content: %TEXT%
+GETFILELIST>examples/mjt/*.mjt,LIST
+Message>Found files: %LIST%
+; HTTP GET (requires network and requests)
+HTTPGET>https://httpbin.org/get,HTTPTXT
+Message>HTTP length: %HTTPTXT%
+; Cleanup
+FileDelete>examples/mjt/test.txt
+Message>Done

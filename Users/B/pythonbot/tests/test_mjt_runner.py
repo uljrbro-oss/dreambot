@@ -89,6 +89,41 @@ def test_findimage_and_waitscreenimage(tmp_path):
     assert it.variables.get('WSI', 0) == 1
 
 
+def test_file_and_http_and_clipboard(tmp_path, monkeypatch):
+    api = DummyAPI()
+    it = MJTInterpreter(log_fn=print, runner_api=api)
+    # WRITEFILE and READFILE
+    p = tmp_path / 'tst.txt'
+    it.run(f'WRITEFILE>{p},hello world')
+    it.run(f'READFILE>{p},TXT')
+    assert 'TXT' in it.variables and 'hello world' in it.variables['TXT']
+
+    # GETFILELIST
+    it.run(f'GETFILELIST>{tmp_path}/*.txt,LIST')
+    assert 'LIST' in it.variables and str(p.name) in it.variables['LIST']
+
+    # FILECOPY and FILEDELETE
+    p2 = tmp_path / 'tst2.txt'
+    it.run(f'FILECOPY>{p},{p2}')
+    assert p2.exists()
+    it.run(f'FILEDELETE>{p2}')
+    assert not p2.exists()
+
+    # HTTPGET: monkeypatch RunnerAPI.http_get
+    def fake_http(url):
+        return 'OK'
+    monkeypatch.setattr(api, 'http_get', fake_http)
+    it.run('HTTPGET>https://example.com,HT')
+    assert it.variables.get('HT') == 'OK'
+
+    # Clipboard: monkeypatch clipboard methods
+    monkeypatch.setattr(api, 'clipboard_set', lambda x: True)
+    monkeypatch.setattr(api, 'clipboard_get', lambda: 'CLIP')
+    it.run('CLIPSET>hello')
+    it.run('CLIPGET>CV')
+    assert it.variables.get('CV') == 'CLIP'
+
+
 def test_repeat_until_loop():
     it = MJTInterpreter()
     script = 'Let>k=0\nRepeat>k\n Let>k=k+1\n Until>k,3\n'
