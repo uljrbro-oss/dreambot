@@ -88,6 +88,32 @@ class RunnerAPI:
         except Exception:
             self.cv2 = None
 
+        # keyboard listener state
+        self._keys_down = set()
+        try:
+            from pynput import keyboard as _pyn_kb
+            def _on_press(k):
+                try:
+                    ch = k.char
+                except Exception:
+                    ch = str(k)
+                self._keys_down.add(str(ch))
+            def _on_release(k):
+                try:
+                    ch = k.char
+                except Exception:
+                    ch = str(k)
+                if str(ch) in self._keys_down:
+                    self._keys_down.discard(str(ch))
+            self._kb_listener = _pyn_kb.Listener(on_press=_on_press, on_release=_on_release)
+            self._kb_listener.daemon = True
+            self._kb_listener.start()
+        except Exception:
+            self._kb_listener = None
+
+    def key_pressed(self, key_repr: str) -> bool:
+        return str(key_repr) in self._keys_down
+
     def click(self, x=None, y=None):
         if self.pyautogui:
             if x is None or y is None:
@@ -222,19 +248,32 @@ class MJTInterpreter:
             if up.upper().startswith('REM') or line.startswith(';'):
                 continue
             self.lines.append(line)
-        # build labels map
+        # build labels map and subroutines
         self.labels = {}
+        self.subroutines = {}
         for i, ln in enumerate(self.lines):
             if '>' in ln:
                 cmd = ln.split('>', 1)[0].strip()
             else:
                 cmd = ln.strip()
             if cmd.upper().startswith('LABEL') or cmd.upper().startswith('SRT'):
-                # format: Label>name
+                # format: Label>name or SRT>name
                 try:
                     _, args = ln.split('>', 1)
                     name = args.strip()
                     self.labels[name] = i
+                    # if SRT, find matching END>name
+                    if cmd.upper().startswith('SRT'):
+                        # scan forward
+                        for j in range(i+1, len(self.lines)):
+                            ln2 = self.lines[j]
+                            if '>' in ln2:
+                                cmd2 = ln2.split('>',1)[0].strip().upper()
+                                if cmd2 == 'END':
+                                    end_name = ln2.split('>',1)[1].strip()
+                                    if end_name == name:
+                                        self.subroutines[name] = (i, j)
+                                        break
                 except Exception:
                     pass
 
@@ -244,6 +283,54 @@ class MJTInterpreter:
         self.parse(script_text)
         pc = 0
         repeat_stack = []  # tuples (varname, start_pc)
+
+        # event handlers
+        self.event_handlers = []
+        self._event_thread = None
+        self._event_thread_stop = threading.Event()
+
+        def _start_event_thread():
+            if self._event_thread and self._event_thread.is_alive():
+                return
+            self._event_thread_stop.clear()
+            def _loop():
+                last_states = [None] * 256
+                while not self._event_thread_stop.is_set() and not self._stop:
+                    for h in list(self.event_handlers):
+                        try:
+                            etype = h.get('type')
+                            if etype == 'PIXEL_COLOR':
+                                x, y = h.get('coord')
+                                target = h.get('color')
+                                rgb = self.runner_api.screenshot_getpixel(int(x), int(y))
+                                val = (int(rgb[0]) << 16) | (int(rgb[1]) << 8) | int(rgb[2])
+                                triggered = (val == target)
+                            elif etype == 'FILE_EXISTS':
+                                import os
+                                fn = h.get('path')
+                                triggered = os.path.exists(fn)
+                            elif etype == 'KEY_DOWN':
+                                key = h.get('key')
+                                triggered = self.runner_api.key_pressed(key)
+                            elif etype == 'CUSTOM':
+                                varname = h.get('var')
+                                triggered = bool(int(self.variables.get(varname, 0)))
+                            else:
+                                triggered = False
+                        except Exception:
+                            triggered = False
+                        # rising edge
+                        if h.get('_last', False) == False and triggered:
+                            # fire subroutine
+                            sub = h.get('sub')
+                            if sub:
+                                t = threading.Thread(target=lambda: self.run_subroutine(sub), daemon=True)
+                                t.start()
+                        h['_last'] = triggered
+                    time.sleep(0.08)
+            self._event_thread = threading.Thread(target=_loop, daemon=True)
+            self._event_thread.start()
+
         while pc < len(self.lines) and not self._stop:
             line = self.lines[pc]
             pc += 1
@@ -485,6 +572,40 @@ class MJTInterpreter:
                             self.log('UNTIL without REPEAT')
                 except Exception as e:
                     self.log(f"UNTIL error: {e}")
+            elif cmd == 'ONEVENT' or cmd == 'ONE':
+                try:
+                    # OnEvent>EventType,EventParm,ExtraParm,Subroutine
+                    parts = [p.strip() for p in args.split(',')]
+                    etype = parts[0].upper() if parts else ''
+                    parm1 = parts[1] if len(parts) > 1 else ''
+                    parm2 = parts[2] if len(parts) > 2 else ''
+                    sub = parts[3] if len(parts) > 3 else ''
+                    if not sub:
+                        # disable matching handler(s)
+                        self.event_handlers = [h for h in self.event_handlers if h.get('sub') != sub]
+                    else:
+                        h = {'type': etype, 'sub': sub}
+                        if etype == 'PIXEL_COLOR':
+                            # parm1 is X:Y, parm2 is color
+                            xstr, ystr = parm1.split(':')
+                            h['coord'] = (int(xstr), int(ystr))
+                            h['color'] = self._parse_color(parm2)
+                        elif etype == 'FILE_EXISTS':
+                            h['path'] = parm1
+                        elif etype == 'KEY_DOWN':
+                            h['key'] = parm1
+                        elif etype == 'CUSTOM':
+                            h['var'] = parm1
+                        else:
+                            # generic
+                            h['parm1'] = parm1
+                            h['parm2'] = parm2
+                        h['_last'] = False
+                        self.event_handlers.append(h)
+                        _start_event_thread()
+                    self.log(f"Registered OnEvent {etype} -> {sub}")
+                except Exception as e:
+                    self.log(f"OnEvent error: {e}")
             elif cmd == 'IF':
                 # Simple conditional: support 'var=value', 'var<>value', 'var>value', 'var<value'
                 try:
@@ -566,7 +687,75 @@ class MJTInterpreter:
                 if cmd.startswith('LABEL') or cmd.startswith('SRT'):
                     continue
                 self.log(f"Unsupported MJT command: {cmd}")
+        # stop event thread
+        try:
+            if self._event_thread:
+                self._event_thread_stop.set()
+        except Exception:
+            pass
         self.log('Script finished')
+
+    def run_subroutine(self, name: str):
+        """Run the subroutine by name (lines between SRT>name and END>name)."""
+        if name not in self.subroutines:
+            self.log(f"Subroutine not found: {name}")
+            return
+        start, end = self.subroutines[name]
+        # execute lines between start+1 .. end-1
+        lines = self.lines[start+1:end]
+        # simple executor similar to main loop but without event registration
+        pc = 0
+        while pc < len(lines) and not self._stop:
+            ln = lines[pc]
+            pc += 1
+            if '>' in ln:
+                cmd, args = ln.split('>', 1)
+                cmd = cmd.strip().upper()
+                args = args.strip()
+            else:
+                cmd = ln.strip().upper()
+                args = ''
+            for k, v in dict(self.variables).items():
+                args = args.replace(f"%{k}%", str(v))
+            if cmd == 'LET':
+                if '=' in args:
+                    name2, expr = args.split('=', 1)
+                    name2 = name2.strip()
+                    val = safe_eval_expr(expr.strip(), self.variables)
+                    self.variables[name2] = int(val)
+                    self.log(f"SRT LET {name2}={val}")
+            elif cmd == 'MESSAGE':
+                self.log(f"SRT {args}")
+            elif cmd == 'WAIT':
+                try:
+                    t = float(args.split(',')[0]) if args else 1.0
+                except Exception:
+                    t = 1.0
+                endt = time.time() + float(t)
+                while time.time() < endt and not self._stop:
+                    time.sleep(0.05)
+            elif cmd == 'MOUSEMOVE':
+                try:
+                    x, y = [int(p.strip()) for p in args.split(',')[:2]]
+                    self.runner_api.move(x, y)
+                except Exception as e:
+                    self.log(f"SRT MouseMove error: {e}")
+            elif cmd.startswith('LCLICK'):
+                times = 1
+                if '*' in args:
+                    parts = args.split('*')
+                    try:
+                        times = int(parts[1].strip())
+                    except Exception:
+                        times = 1
+                for _ in range(max(1, times)):
+                    if self._stop:
+                        break
+                    self.runner_api.click()
+                    time.sleep(0.05)
+            else:
+                self.log(f"SRT Unsupported MJT command: {cmd}")
+        self.log(f"Subroutine {name} finished")
 
     def _parse_color(self, token: str) -> int:
         token = token.strip()

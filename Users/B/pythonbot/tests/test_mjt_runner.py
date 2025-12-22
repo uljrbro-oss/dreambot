@@ -124,6 +124,23 @@ def test_file_and_http_and_clipboard(tmp_path, monkeypatch):
     assert it.variables.get('CV') == 'CLIP'
 
 
+def test_onevent_pixel_and_file(tmp_path):
+    api = DummyAPI()
+    it = MJTInterpreter(log_fn=print, runner_api=api)
+    # prepare a subroutine and onevent for pixel
+    api.set_pixel(20, 30, (77, 169, 49))
+    script = 'SRT>DoIt\n Let>F=0\n End\nOnEvent>PIXEL_COLOR,20:30,#4DA931,DoIt\nWait>0.5\n'
+    it.run(script)
+    assert it.variables.get('F', None) == 0 or it.variables.get('F', None) == 1
+
+    # file exists event
+    fn = tmp_path / 'x.flag'
+    fn.write_text('ok')
+    script2 = f'SRT>DoFile\n Let>G=1\n End\nOnEvent>FILE_EXISTS,{fn},0,DoFile\nWait>0.2\n'
+    it.run(script2)
+    assert it.variables.get('G', None) == 1
+
+
 def test_repeat_until_loop():
     it = MJTInterpreter()
     script = 'Let>k=0\nRepeat>k\n Let>k=k+1\n Until>k,3\n'
