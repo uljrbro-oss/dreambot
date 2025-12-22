@@ -75,13 +75,18 @@ def safe_eval_expr(expr: str, variables: Dict[str, int]) -> int:
 
 
 class RunnerAPI:
-    """Abstract runtime side-effect API. Default implementation uses pyautogui."""
+    """Abstract runtime side-effect API. Default implementation uses pyautogui and OpenCV."""
     def __init__(self):
         try:
             import pyautogui
             self.pyautogui = pyautogui
         except Exception:
             self.pyautogui = None
+        try:
+            import cv2
+            self.cv2 = cv2
+        except Exception:
+            self.cv2 = None
 
     def click(self, x=None, y=None):
         if self.pyautogui:
@@ -99,6 +104,36 @@ class RunnerAPI:
             return self.pyautogui.screenshot().getpixel((int(x), int(y)))
         return (0, 0, 0)
 
+    def screenshot(self):
+        """Return a numpy array screenshot in RGB format (H, W, 3)."""
+        if self.pyautogui:
+            return self.pyautogui.screenshot()
+        return None
+
+    def find_image(self, template_path, threshold=0.8):
+        """Find template image on current screen. Returns center (x,y) or None."""
+        if self.cv2 is None:
+            return None
+        try:
+            import numpy as _np
+            # get screenshot as numpy array (PIL Image)
+            screen = self.screenshot()
+            if screen is None:
+                return None
+            screen_arr = _np.array(screen)
+            # convert PIL RGB to BGR for cv2
+            screen_bgr = self.cv2.cvtColor(screen_arr, self.cv2.COLOR_RGB2BGR)
+            tpl = self.cv2.imread(str(template_path))
+            if tpl is None:
+                return None
+            res = self.cv2.matchTemplate(screen_bgr, tpl, self.cv2.TM_CCOEFF_NORMED)
+            _, maxval, _, maxloc = self.cv2.minMaxLoc(res)
+            if maxval >= float(threshold):
+                h, w = tpl.shape[:2]
+                return (int(maxloc[0] + w // 2), int(maxloc[1] + h // 2))
+        except Exception:
+            return None
+        return None
 
 class MJTInterpreter:
     def __init__(self, log_fn: Optional[Callable[[str], None]] = None, runner_api: Optional[RunnerAPI] = None):
@@ -206,6 +241,54 @@ class MJTInterpreter:
                     self.log(f"GPC {varname}={val}")
                 except Exception as e:
                     self.log(f"GPC error: {e}")
+            elif cmd == 'FINDIMAGEPOS':
+                try:
+                    # FINDIMAGEPOS>template_path,varx,vary
+                    parts = [p.strip() for p in args.split(',')]
+                    tpl = parts[0]
+                    varx = parts[1] if len(parts) > 1 else None
+                    vary = parts[2] if len(parts) > 2 else None
+                    coords = self.runner_api.find_image(tpl)
+                    if coords:
+                        x, y = coords
+                        if varx:
+                            self.variables[varx] = int(x)
+                        if vary:
+                            self.variables[vary] = int(y)
+                        self.log(f"FINDIMAGE found at {x},{y}")
+                    else:
+                        if varx:
+                            self.variables[varx] = -1
+                        if vary:
+                            self.variables[vary] = -1
+                        self.log("FINDIMAGE not found")
+                except Exception as e:
+                    self.log(f"FINDIMAGE error: {e}")
+            elif cmd in ('WAITSCREENIMAGE', 'WSI'):
+                try:
+                    # WAITSCREENIMAGE>template_path,timeout,var
+                    parts = [p.strip() for p in args.split(',')]
+                    tpl = parts[0]
+                    timeout = float(parts[1]) if len(parts) > 1 else 0
+                    varname = parts[2] if len(parts) > 2 else None
+                    found = False
+                    start = time.time()
+                    while not self._stop:
+                        coords = self.runner_api.find_image(tpl)
+                        if coords:
+                            found = True
+                            fx, fy = coords
+                            self.variables['FOUND_X'] = int(fx)
+                            self.variables['FOUND_Y'] = int(fy)
+                            break
+                        if timeout > 0 and (time.time() - start) >= float(timeout):
+                            break
+                        time.sleep(0.05)
+                    if varname:
+                        self.variables[varname] = int(found)
+                    self.log(f"WSI found={found}")
+                except Exception as e:
+                    self.log(f"WSI error: {e}")
             elif cmd in ('WAITPIXELCOLOR', 'WPC'):
                 try:
                     parts = [p.strip() for p in args.split(',')]

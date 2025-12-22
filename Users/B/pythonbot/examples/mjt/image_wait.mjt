@@ -1,0 +1,14 @@
+; Example: wait for an image template and click it
+Message>Starting image wait example
+Wait>0.5
+; template path should point to an image file in macros/ or examples/mjt/
+Let>TPL=examples/mjt/test_template.png
+WaitScreenImage>%TPL%,5,WSI
+If>WSI=1
+  Message>Image found at %FOUND_X%,%FOUND_Y%
+  MouseMove>%FOUND_X%,%FOUND_Y%
+  LClick
+Else
+  Message>Image not found within timeout
+EndIf
+Message>Finished

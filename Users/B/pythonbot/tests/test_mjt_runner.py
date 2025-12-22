@@ -55,6 +55,40 @@ def test_getpixelcolor_and_wpc_timeout():
     assert it.variables.get('WPC_RESULT', 0) == 0
 
 
+def test_findimage_and_waitscreenimage(tmp_path):
+    # create a small template and a screenshot containing it
+    import numpy as _np
+    import cv2
+    tpl = _np.zeros((10, 10, 3), dtype=_np.uint8)
+    tpl[:] = (0, 0, 255)  # red box in BGR
+    tpl_path = tmp_path / 'tpl.png'
+    cv2.imwrite(str(tpl_path), tpl)
+
+    # create a larger screenshot with the template at position (50,60)
+    screen = _np.zeros((200, 300, 3), dtype=_np.uint8)
+    # put red box in screen at y=60..69, x=50..59 (BGR)
+    screen[60:70, 50:60] = (0, 0, 255)
+
+    class ImageAPI(DummyAPI):
+        def screenshot(self):
+            # return a PIL Image-like object; we can return numpy array and RunnerAPI handles it
+            return screen[:, :, ::-1]  # convert BGR to RGB
+        def screenshot_getpixel(self, x, y):
+            # return pixel from the screen
+            rgb = tuple(int(v) for v in screen[y, x, ::-1])
+            return rgb
+
+    api = ImageAPI()
+    it = MJTInterpreter(log_fn=print, runner_api=api)
+    # FINDIMAGEPOS>tpl,varx,vary
+    it.run(f'FINDIMAGEPOS>{tpl_path},RX,RY')
+    assert it.variables['RX'] == 55 and it.variables['RY'] == 65
+
+    # WAITSCREENIMAGE: should set variable
+    it.run(f'WSI>{tpl_path},0.2,WSI')
+    assert it.variables.get('WSI', 0) == 1
+
+
 def test_repeat_until_loop():
     it = MJTInterpreter()
     script = 'Let>k=0\nRepeat>k\n Let>k=k+1\n Until>k,3\n'
