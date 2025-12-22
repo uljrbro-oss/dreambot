@@ -865,6 +865,10 @@ class MacroApp(QWidget):
         btn_row.addWidget(btn_run)
         btn_row.addWidget(btn_stop)
         btn_row.addWidget(btn_step)
+        btn_toggle_bp = QPushButton('Toggle Breakpoint')
+        btn_show_bps = QPushButton('Breakpoints')
+        btn_row.addWidget(btn_toggle_bp)
+        btn_row.addWidget(btn_show_bps)
         btn_row.addWidget(btn_resume)
         btn_row.addWidget(btn_insert)
         layout.addLayout(btn_row)
@@ -925,6 +929,37 @@ class MacroApp(QWidget):
             if not ok:
                 QMessageBox.information(self, 'Debugger', 'No more lines to step or debugger stopped')
 
+        def toggle_breakpoint_ui():
+            # determine current cursor line in editor and map to debugger line index
+            cursor = editor.textCursor()
+            block = cursor.blockNumber()  # 0-based in full editor
+            full_lines = editor.toPlainText().splitlines()
+            if block >= len(full_lines):
+                QMessageBox.warning(self, 'Breakpoint', 'No line under cursor')
+                return
+            # count non-empty, non-comment lines up to block
+            idx = -1
+            for i in range(0, block+1):
+                l = full_lines[i]
+                if not l.strip():
+                    continue
+                up = l.lstrip()
+                if up.upper().startswith('REM') or l.strip().startswith(';'):
+                    continue
+                idx += 1
+            if idx < 0:
+                QMessageBox.warning(self, 'Breakpoint', 'No executable statement at this line')
+                return
+            dbg.toggle_breakpoint(idx)
+            QMessageBox.information(self, 'Breakpoint', f'Toggled breakpoint at logical line {idx+1}')
+
+        def show_breakpoints_ui():
+            bps = dbg.list_breakpoints()
+            if not bps:
+                QMessageBox.information(self, 'Breakpoints', 'No breakpoints set')
+            else:
+                QMessageBox.information(self, 'Breakpoints', 'Breakpoints at lines: ' + ','.join(str(x) for x in bps))
+
         def resume_text():
             txt = editor.toPlainText()
             if dbg.lines == []:
@@ -948,6 +983,8 @@ class MacroApp(QWidget):
         btn_run.clicked.connect(run_text)
         btn_stop.clicked.connect(stop_text)
         btn_step.clicked.connect(step_text)
+        btn_toggle_bp.clicked.connect(toggle_breakpoint_ui)
+        btn_show_bps.clicked.connect(show_breakpoints_ui)
         btn_resume.clicked.connect(resume_text)
         btn_insert.clicked.connect(insert_actions)
 

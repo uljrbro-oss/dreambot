@@ -789,22 +789,116 @@ class MJTDebugger:
         # simple parse (reuse interpreter parsing rules)
         self.lines = []
         for raw in script_text.splitlines():
-            line = raw.strip()
-            if not line:
+            line = raw.rstrip('\n')
+            if not line.strip():
                 continue
             up = line.lstrip()
-            if up.upper().startswith('REM') or line.startswith(';'):
+            if up.upper().startswith('REM') or line.strip().startswith(';'):
                 continue
-            self.lines.append(line)
+            self.lines.append(line.strip())
         self.variables = {}
         self.pc = 0
         self._stop = False
+        self.breakpoints = set()
+        # compute labels
+        self.labels = {}
+        self.subroutines = {}
+        for i, ln in enumerate(self.lines):
+            if '>' in ln:
+                cmd = ln.split('>', 1)[0].strip().upper()
+                args = ln.split('>', 1)[1].strip()
+            else:
+                cmd = ln.strip().upper(); args = ''
+            if cmd == 'LABEL' or cmd == 'SRT':
+                name = args
+                self.labels[name] = i
+            if cmd == 'SRT':
+                # find matching END>name
+                for j in range(i+1, len(self.lines)):
+                    ln2 = self.lines[j]
+                    if '>' in ln2:
+                        cmd2 = ln2.split('>',1)[0].strip().upper()
+                        if cmd2 == 'END':
+                            end_name = ln2.split('>',1)[1].strip()
+                            if end_name == args:
+                                self.subroutines[args] = (i, j)
+                                break
         self.log('Debugger loaded')
 
     def step(self):
+        # pause if we're stopped or out of lines
         if self.pc >= len(self.lines) or self._stop:
             self.log('Debugger: no more lines or stopped')
             return False
+        # breakpoint check
+        if self.pc in getattr(self, 'breakpoints', set()):
+            self.log(f"Debugger: hit breakpoint at line {self.pc+1}")
+            self._stop = True
+            return False
+        line = self.lines[self.pc]
+        # handle IF/GOTO special logic before advancing
+        try:
+            if '>' in line:
+                cmd0, args0 = line.split('>', 1)
+                cmd0 = cmd0.strip().upper()
+                args0 = args0.strip()
+            else:
+                cmd0 = line.strip().upper(); args0 = ''
+            # IF: if false, skip to ELSE/ENDIF
+            if cmd0 == 'IF':
+                # evaluate simple conditions like var=val
+                cond = args0.strip()
+                matched = False
+                for op in ['<>', '>=', '<=', '>', '<', '=']:
+                    if op in cond:
+                        left, right = cond.split(op, 1)
+                        left = left.strip(); right = right.strip()
+                        lv = int(self.variables.get(left, 0)) if left.isidentifier() else int(left)
+                        rv = int(right)
+                        if op == '<>': matched = (lv != rv)
+                        elif op == '>=': matched = (lv >= rv)
+                        elif op == '<=': matched = (lv <= rv)
+                        elif op == '>': matched = (lv > rv)
+                        elif op == '<': matched = (lv < rv)
+                        else: matched = (lv == rv)
+                        break
+                self.pc += 1
+                if not matched:
+                    depth = 0
+                    while self.pc < len(self.lines):
+                        ln = self.lines[self.pc]
+                        self.pc += 1
+                        cmd2 = ln.split('>',1)[0].strip().upper() if '>' in ln else ln.strip().upper()
+                        if cmd2 == 'IF':
+                            depth += 1
+                        elif cmd2 == 'ENDIF':
+                            if depth == 0:
+                                break
+                            else:
+                                depth -= 1
+                        elif cmd2 == 'ELSE' and depth == 0:
+                            break
+                    return True
+                return True
+            # GOTO: jump
+            if cmd0 == 'GOTO':
+                try:
+                    label = args0.strip()
+                    if label in getattr(self, 'labels', {}):
+                        self.pc = self.labels[label] + 1
+                        return True
+                    else:
+                        self.log(f"DBG GOTO: label not found: {label}")
+                        self.pc += 1
+                        return True
+                except Exception as e:
+                    self.log(f"DBG GOTO error: {e}")
+                    self.pc += 1
+                    return True
+        except Exception:
+            pass
+
+        # normal step execution
         line = self.lines[self.pc]
         self.pc += 1
         try:
@@ -818,7 +912,7 @@ class MJTDebugger:
             # substitute variables
             for k, v in dict(self.variables).items():
                 args = args.replace(f"%{k}%", str(v))
-            # support a small subset (LET, MESSAGE, WAIT small, MOUSEMOVE, LCLICK, GPC, WPC)
+            # support a small subset (LET, MESSAGE, WAIT small, MOUSEMOVE, LCLICK, GPC, WPC, IF/GOTO handled above)
             if cmd == 'LET' and '=' in args:
                 name, expr = args.split('=', 1)
                 name = name.strip()
@@ -926,6 +1020,25 @@ class MJTDebugger:
         self._stop = True
         self._running = False
 
+    def toggle_breakpoint(self, line_index: int):
+        if not hasattr(self, 'breakpoints'):
+            self.breakpoints = set()
+        if line_index in self.breakpoints:
+            self.breakpoints.remove(line_index)
+            self.log(f"Breakpoint removed: {line_index+1}")
+        else:
+            self.breakpoints.add(line_index)
+            self.log(f"Breakpoint added: {line_index+1}")
+
+    def list_breakpoints(self):
+        if not hasattr(self, 'breakpoints'):
+            return []
+        return sorted([i+1 for i in self.breakpoints])
+
+    def clear_breakpoints(self):
+        if hasattr(self, 'breakpoints'):
+            self.breakpoints.clear()
+
     def get_state(self):
-        return {'pc': self.pc, 'variables': dict(self.variables), 'running': self._running}
+        return {'pc': self.pc, 'variables': dict(self.variables), 'running': self._running, 'breakpoints': self.list_breakpoints()}
 
