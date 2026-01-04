@@ -15,10 +15,9 @@ public class client {
   public void method1() {
     int tabID = 1;
     
-    // Decompiler artifact - stray this; statement
-/*  6607 */     this; if (this.anInt1054 == tabID) {
+/*  6607 */     if (this.anInt1054 == tabID) {
       System.out.println("Tab ID matches");
-/*  6609 */       this; this.stream.writeWordBigEndian(tabID);
+/*  6609 */       this.stream.writeWordBigEndian(tabID);
     }
     
     System.out.println("Method 1 complete");
@@ -26,8 +25,7 @@ public class client {
   
   public void method2() {
     System.out.println("Logging in...");
-    // Another decompiler artifact
-/* 12089 */           this; loggedIn = true;
+/* 12089 */           loggedIn = true;
     System.out.println("Logged in: " + loggedIn);
   }
   

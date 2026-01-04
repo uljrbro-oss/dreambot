@@ -54,9 +54,7 @@ public class Censor {
   public static void method411() {
     int l1 = 5;
 /*  412 */           if (l1 > 2) {
-              // Missing closing brace here causes "reached end of file while parsing"
               System.out.println("Value is greater than 2");
-            // } <- This brace is missing, causing parser error
-  
-  // End of file - missing closing braces for the method and class
+            }
+  }
 }

@@ -1,11 +1,10 @@
 package rs2.sign;
 
 import java.io.*;
-// Missing imports that cause "cannot find symbol" errors:
-// import java.applet.Applet;
-// import javax.sound.midi.*;
-// import javax.sound.sampled.*;
-// import java.net.URL;
+import java.applet.Applet;
+import javax.sound.midi.*;
+import javax.sound.sampled.*;
+import java.net.URL;
 
 public class signlink {
   
@@ -20,14 +19,14 @@ public class signlink {
   
   public static void playWave(String wave) {
     try {
-      Object audioInputStream = null;
+      AudioInputStream audioInputStream = null;
       try {
 /*  168 */             audioInputStream = AudioSystem.getAudioInputStream(new File(wave));
 /*  169 */           } catch (UnsupportedAudioFileException e1) {
         e1.printStackTrace();
       }
       
-      Object info = null;
+      DataLine.Info info = null;
       try {
 /*  182 */             auline = (SourceDataLine)AudioSystem.getLine(info);
         auline.toString();
